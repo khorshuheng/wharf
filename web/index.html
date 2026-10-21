@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wharf</title>
+  <meta name="theme-color" content="#0b1220">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="/icon.svg" alt="" width="26" height="26">
+      <span>Wharf</span>
+    </div>
+    <div class="status">
+      <span id="status-dot" class="dot"></span>
+      <span id="status">connecting</span>
+    </div>
+  </header>
+
+  <main>
+    <section id="auth" class="card hidden">
+      <h2>Access token</h2>
+      <p class="muted">This server requires a bearer token.</p>
+      <form id="auth-form" class="row">
+        <input id="token" type="password" placeholder="Bearer token" autocomplete="off" spellcheck="false">
+        <button type="submit">Connect</button>
+      </form>
+    </section>
+
+    <section id="drop" class="card drop">
+      <input id="file-input" type="file" multiple hidden>
+      <div class="drop-inner">
+        <p><strong>Drop files here</strong> or <button id="browse" class="link" type="button">browse</button></p>
+        <p class="muted">Uploads land in <code>inbox/</code> and are replicated to this device.</p>
+      </div>
+      <div id="progress" class="progress"></div>
+    </section>
+
+    <section class="card">
+      <div class="list-head">
+        <h2>Files</h2>
+        <div class="list-actions">
+          <span id="storage" class="muted small"></span>
+          <button id="refresh" class="ghost" type="button">Sync now</button>
+        </div>
+      </div>
+      <div id="sync-detail" class="muted small"></div>
+      <div id="persist-note" class="muted small hidden"></div>
+      <div id="empty" class="muted hidden">No files yet.</div>
+      <ul id="files" class="files"></ul>
+    </section>
+  </main>
+
+  <template id="file-template">
+    <li class="file">
+      <div class="file-main">
+        <a class="file-name" href="#"></a>
+        <div class="file-meta muted"></div>
+      </div>
+      <div class="file-actions">
+        <button class="ghost download" type="button">Download</button>
+        <button class="ghost danger delete" type="button">Delete</button>
+      </div>
+    </li>
+  </template>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
