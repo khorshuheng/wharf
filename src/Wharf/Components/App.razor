@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <ResourcePreloader />
+    <meta name="theme-color" content="#0b1220" />
+    <link rel="manifest" href="@Assets["manifest.webmanifest"]" />
+    <link rel="icon" href="@Assets["icon.svg"]" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="@Assets["apple-touch-icon.png"]" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="stylesheet" href="@Assets["styles.css"]" />
+    <ImportMap />
+    <HeadOutlet />
+    <script src="@Assets["js/install.js"]"></script>
+</head>
+
+<body>
+    <Routes />
+    <script src="@Assets["_framework/blazor.web.js"]"></script>
+</body>
+
+</html>

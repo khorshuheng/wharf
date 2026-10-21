@@ -1,7 +1,8 @@
 # Wharf
 
-A drop point for files: one authoritative server, browser clients that upload
-and pull on demand. No peer-to-peer reconciliation, no browser-side replica.
+A drop point for files: one authoritative server and browser clients that keep
+a full local replica. The client renders from its replica, works offline, and
+can re-seed a wiped server.
 
 The contract is in [`docs/api.md`](docs/api.md). This repository is the
 implementation of that contract.
@@ -9,33 +10,60 @@ implementation of that contract.
 ## Layout
 
 ```
-server/        .NET 10 minimal API + SQLite
-web/           installable PWA (plain HTML/CSS/JS)
-docs/api.md    the API contract
-data/          runtime state (gitignored): wharf.db, objects/, tmp/
+src/Wharf/           Blazor Web App host: SSR, minimal API, SQLite, static assets
+src/Wharf.Client/    Interactive WebAssembly components (the file manager)
+src/Wharf/wwwroot/   PWA manifest, icons, service worker, replica JS modules
+docs/api.md          the API contract
+Wharf.slnx           solution
 ```
 
-The PWA is served from the same origin as the API, so there is no CORS in
-production. In development the server finds `web/` next to itself; `WHARF_WEB_ROOT`
-overrides that.
+The server and the app share one origin, so there is no CORS in production.
 
 ## Run
 
 ```sh
-dotnet run --project server/Wharf.Server.csproj
-# open http://127.0.0.1:5080
+dotnet run --project src/Wharf/Wharf.csproj
+# open http://localhost:5080
 ```
 
-Set a token before exposing the server beyond loopback:
+`Properties/launchSettings.json` selects the Development environment and port
+5080. The first run creates `src/Wharf/data/` (override with `WHARF_DATA_DIR`).
+
+Publish for a deployment:
 
 ```sh
-Wharf__Token=change-me dotnet run --project server/Wharf.Server.csproj
+dotnet publish src/Wharf/Wharf.csproj -c Release -o publish
+WHARF_DATA_DIR=/workspace/.wharf ./publish/wharf --urls http://0.0.0.0:5080
 ```
 
-With no token configured the API is open and logs a warning. Do not run that
-way on a reachable interface.
+`0.0.0.0` is what Gitpod/Ona's port proxy needs. On a local port-forward
+(`ssh -L 5080:localhost:5080`) the default loopback listener is enough.
 
-Configuration comes from `server/appsettings.json`, environment variables
+> Development static assets (`_framework/*`) are served by `MapStaticAssets`.
+> Run through `dotnet run` (which uses the Development profile) or publish;
+> a Production build started with `--no-build` does not have the development
+> static-asset manifest.
+
+## Authentication and origin
+
+The app implements no authentication. Put it behind a trusted proxy (the
+Gitpod/Ona port forward, a tunnel, or a local SSH forward) or keep it on
+loopback. The API still supports an optional bearer token for other
+deployments, but the Blazor client has no token UI, so leave `Wharf:Token`
+empty when using it.
+
+The client is a full replica, and browser storage is keyed by **origin**. For
+an installed PWA to survive a recreated workspace, use a stable origin:
+
+- a tunnel with a fixed hostname, or
+- a fixed local port-forward such as `http://localhost:5080`.
+
+A platform forwarded URL changes when a workspace is recreated, and the
+installed app and its OPFS replica stay behind on the old origin.
+
+## Configuration
+
+Configuration comes from `src/Wharf/appsettings.json`, environment variables
 (`Wharf__Token`), and the command line (`--Wharf:Token=...`):
 
 | Key | Default | Meaning |
@@ -51,9 +79,8 @@ Configuration comes from `server/appsettings.json`, environment variables
 | `Wharf:ChunkSize` | 8 MiB | Chunk hint returned by upload sessions |
 | `Wharf:DevOrigin` | empty | Optional dev CORS origin |
 
-`WHARF_DATA_DIR` and `WHARF_WEB_ROOT` override the data and web roots. URLs
-come from `--urls` or `ASPNETCORE_URLS`; the default is
-`http://127.0.0.1:5080`.
+`WHARF_DATA_DIR` overrides the data directory. URLs come from `--urls` or
+`ASPNETCORE_URLS`; the default is `http://127.0.0.1:5080`.
 
 ## What the server does
 
@@ -65,56 +92,65 @@ come from `--urls` or `ASPNETCORE_URLS`; the default is
   yields `name (2).ext` instead of overwriting.
 - Large uploads use `POST /api/v1/uploads` plus `PATCH` with `Upload-Offset`.
 - Downloads support `Range`, `ETag`, and immutable caching on the blob route.
-- `GET /api/v1/events` is an SSE poke (cursor only). The PWA currently polls
-  every 5 s; SSE is available to other clients.
+- `GET /api/v1/events` is an SSE poke (cursor only).
 - GC purges expired tombstones, advances the minimum valid cursor, deletes
   unreferenced blobs, and drops expired upload sessions.
 
-## What the PWA does
+## What the client does
 
-- Keeps the app shell in the service worker cache and data in OPFS/IndexedDB.
-- Polls the manifest delta and keeps a **full replica**: every live file is
-  downloaded into OPFS, keyed by its content hash, with the manifest in
-  IndexedDB.
-- Drags-and-drops files to `inbox/`, with progress; the server assigns a
-  unique name on collision, and the dropped file is written into the local
-  replica immediately.
-- Serves downloads from OPFS, so they work offline. A missing blob is fetched
-  from the server first.
-- Detects a server reset by `instance_id` (or a cursor ahead of the server) and
-  **automatically re-uploads the replica**, skipping blobs the new server
-  already has. Conflicts are kept as `name (2).ext` rather than overwritten.
-- Stores the bearer token in `localStorage` so an installed replica can sync
-  unattended.
+- The Blazor Web App server-renders the shell and a skeleton; the file manager
+  is an Interactive WebAssembly component that hydrates and then reads the
+  replica. The server never renders the file list, so there is one source of
+  truth.
+- The replica engine (`wwwroot/js/store.js` and `sync.js`) keeps the manifest
+  in IndexedDB and file bodies in OPFS, keyed by content hash. Blazor reaches
+  it through `wwwroot/js/interop.js`; file bytes never cross the interop
+  boundary.
+- Files dragged into the app go to `inbox/`; the server assigns a unique name
+  on collision and the dropped bytes are written into the local replica.
+- Downloads come from OPFS, so they work offline.
+- `instance_id` (or a cursor ahead of the server) detects a reset and
+  automatically re-uploads the replica, skipping blobs the new server already
+  has. Conflicts are kept as `name (2).ext`.
+- The service worker caches the shell and framework assets on first use;
+  `/api/*` is network-only.
+- The install button appears when the browser offers `beforeinstallprompt`;
+  iOS gets a Share → Add to Home Screen hint.
 
 ## Smoke test
 
 ```sh
 B=http://127.0.0.1:5080
-A='Authorization: Bearer change-me'
 
 curl -s $B/healthz
-curl -s -H "$A" "$B/api/v1/manifest"
-printf 'hello\n' | curl -s -X PUT -H "$A" --data-binary @- \
+curl -s "$B/api/v1/manifest"
+printf 'hello\n' | curl -s -X PUT --data-binary @- \
   "$B/api/v1/files/inbox/hello.txt?on_conflict=rename"
-curl -s -H "$A" "$B/api/v1/manifest"
-curl -s -H "$A" -o - "$B/api/v1/files/inbox/hello.txt"
-curl -s -X DELETE -H "$A" "$B/api/v1/entries/inbox/hello.txt"
+curl -s "$B/api/v1/manifest"
+curl -s -o - "$B/api/v1/files/inbox/hello.txt"
+curl -s -X DELETE "$B/api/v1/entries/inbox/hello.txt"
 ```
+
+If `Wharf:Token` is set, add `-H 'Authorization: Bearer <token>'` to each API
+call.
 
 ## Known gaps
 
-- No TLS and no quota enforcement yet; put it behind a TLS proxy and a reverse
-  proxy limit before exposing it. `507` is reserved but nothing returns it.
-- SSE is implemented but the PWA polls.
-- Replication is subject to browser storage quotas and eviction. The PWA asks
-  for persistent storage, but iOS can still evict it; a client that never
+- No TLS and no quota enforcement; put it behind a TLS proxy and a request
+  limit before exposing it. `507` is reserved but nothing returns it.
+- Blazor WebAssembly ships a sizable first-load payload. The service worker
+  makes repeat loads cheap, but the first visit is heavier than the previous
+  vanilla-JS client.
+- Replication is subject to browser storage quotas and eviction. The client
+  asks for persistent storage, but iOS can still evict it; a client that never
   downloaded a file cannot restore it.
+- The service worker precaches the published shell and framework assets on
+  install, so the very first visit must be online; after that the app loads
+  offline.
 - No replication between drop points.
 - The SQLite index is single-node by design.
 - The server is still a single failure domain. A full client replica helps
-  only while at least one replica survives; back up `wharf.db` and `objects/`
-  as well.
+  only while at least one replica survives; back up `wharf.db` and `objects/`.
 
 ## License
 

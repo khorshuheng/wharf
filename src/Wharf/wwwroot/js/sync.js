@@ -64,7 +64,7 @@ async function api(path, options = {}) {
   return response;
 }
 
-function putFile(path, file, mtime, contentType, digestHex) {
+function putFile(path, file, mtime, contentType, digestHex, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', `${API}/files/${encodePath(path)}?on_conflict=rename`);
@@ -73,6 +73,12 @@ function putFile(path, file, mtime, contentType, digestHex) {
     xhr.setRequestHeader('Content-Type', contentType || 'application/octet-stream');
     xhr.setRequestHeader('X-File-Mtime', String(mtime || Date.now()));
     if (digestHex) xhr.setRequestHeader('Content-Digest', `sha-256=:${hexToBase64(digestHex)}:`);
+
+    if (onProgress) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) onProgress(event.loaded / event.total);
+      };
+    }
 
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
@@ -385,13 +391,14 @@ export async function run() {
   }
 }
 
-export async function uploadFile(file) {
+export async function uploadFile(file, onProgress) {
   const entry = await putFile(
     `inbox/${file.name}`,
     file,
     file.lastModified || Date.now(),
     file.type || 'application/octet-stream',
     null,
+    onProgress,
   );
 
   if (entry?.blob) {

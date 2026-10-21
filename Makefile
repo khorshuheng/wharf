@@ -1,11 +1,14 @@
-.PHONY: run build clean
+.PHONY: run build publish clean
 
 run:
-	dotnet run --project server/Wharf.Server.csproj
+	dotnet run --project src/Wharf/Wharf.csproj
 
 build:
-	dotnet build server/Wharf.Server.csproj
+	dotnet build Wharf.slnx
+
+publish:
+	dotnet publish src/Wharf/Wharf.csproj -c Release -o publish
 
 clean:
-	dotnet clean server/Wharf.Server.csproj
-	rm -rf server/bin server/obj
+	dotnet clean Wharf.slnx
+	rm -rf publish src/Wharf/bin src/Wharf/obj src/Wharf.Client/bin src/Wharf.Client/obj

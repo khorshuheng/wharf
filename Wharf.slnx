@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Wharf.Client/Wharf.Client.csproj" />
+    <Project Path="src/Wharf/Wharf.csproj" />
+  </Folder>
+</Solution>

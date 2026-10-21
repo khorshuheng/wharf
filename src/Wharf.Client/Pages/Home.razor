@@ -1,0 +1,276 @@
+@page "/"
+@rendermode InteractiveWebAssembly
+@inject IJSRuntime JS
+
+<PageTitle>Wharf</PageTitle>
+
+<header class="topbar">
+    <div class="brand">
+        <img src="/icon.svg" alt="" width="26" height="26" />
+        <h1>Wharf</h1>
+    </div>
+    <div class="status">
+        <span class="dot @Tone"></span>
+        <span>@Status</span>
+    </div>
+</header>
+
+<main>
+    @if (InstallAvailable)
+    {
+        <section class="card">
+            <p><strong>Install Wharf</strong> for an app window and a durable local replica.</p>
+            <button type="button" @onclick="InstallAsync">Install app</button>
+        </section>
+    }
+    else if (ShowIosHint)
+    {
+        <section class="card">
+            <p class="muted">To install on iOS, use <strong>Share → Add to Home Screen</strong>.</p>
+        </section>
+    }
+
+    <section id="drop-zone" class="card drop">
+        <input id="file-input" type="file" multiple hidden />
+        <div class="drop-inner">
+            <p><strong>Drop files here</strong> or <button type="button" class="link" @onclick="BrowseAsync">browse</button></p>
+            <p class="muted">Uploads land in <code>inbox/</code> and are replicated to this device.</p>
+        </div>
+        <div id="uploads" class="progress"></div>
+    </section>
+
+    <section class="card">
+        <div class="list-head">
+            <h2>Files</h2>
+            <div class="list-actions">
+                <span class="muted small">@StorageText</span>
+                <button type="button" class="ghost" @onclick="SyncNowAsync">Sync now</button>
+            </div>
+        </div>
+        <div class="muted small">@StatusDetail</div>
+
+        @if (!Loaded)
+        {
+            <div class="skeleton-list">
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+            </div>
+        }
+        else if (Files.Count == 0)
+        {
+            <div class="muted">No files yet.</div>
+        }
+        else
+        {
+            <ul class="files">
+                @foreach (var file in Files)
+                {
+                    <li class="file">
+                        <div class="file-main">
+                            <a class="file-name" href="#" @onclick:preventDefault @onclick="() => DownloadAsync(file.Path)">@DisplayName(file.Path)</a>
+                            <div class="file-meta muted">@FormatSize(file.Size) · @FormatDate(file.Mtime)</div>
+                        </div>
+                        <div class="file-actions">
+                            <button type="button" class="ghost" @onclick="() => DownloadAsync(file.Path)">Download</button>
+                            <button type="button" class="ghost danger" @onclick="() => RemoveAsync(file.Path)">Delete</button>
+                        </div>
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+</main>
+
+@code {
+    private IJSObjectReference? module;
+    private DotNetObjectReference<Home>? self;
+    private List<FileItem> Files = new();
+    private bool Loaded;
+    private bool InstallAvailable;
+    private bool ShowIosHint;
+    private string Status = "starting";
+    private string StatusDetail = string.Empty;
+    private string Tone = string.Empty;
+    private string StorageText = string.Empty;
+
+    public sealed record FileItem(string Path, long Size, long Mtime, string? Blob);
+
+    public sealed record StorageInfo(long Usage, long Quota);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        module = await JS.InvokeAsync<IJSObjectReference>("import", "/js/interop.js");
+        self = DotNetObjectReference.Create(this);
+
+        await module.InvokeVoidAsync("init", self);
+        await module.InvokeVoidAsync("bindDropZone", "drop-zone", "file-input", "uploads", self);
+
+        await LoadAsync();
+        await RefreshInstallAsync();
+        await RefreshStorageAsync();
+
+        await module.InvokeVoidAsync("requestPersistence");
+        await module.InvokeVoidAsync("syncNow");
+    }
+
+    private async Task LoadAsync()
+    {
+        if (module is null)
+            return;
+
+        try
+        {
+            var files = await module.InvokeAsync<List<FileItem>>("list");
+            Files = files.OrderBy(file => file.Path, StringComparer.Ordinal).ToList();
+            Loaded = true;
+        }
+        catch (JSException)
+        {
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public async Task OnSyncStatus(string state, string? detail)
+    {
+        Status = state switch
+        {
+            "checking" => "checking",
+            "downloading" => "syncing",
+            "reseeding" => "restoring",
+            "offline" => "offline",
+            "unauthorized" => "locked",
+            "replica-incomplete" => "restored with gaps",
+            "ready" => "in sync",
+            _ => state,
+        };
+
+        Tone = state is "offline" or "unauthorized" or "replica-incomplete" ? "bad" : string.Empty;
+        StatusDetail = detail ?? string.Empty;
+
+        await InvokeAsync(StateHasChanged);
+
+        if (state is "ready" or "replica-incomplete" or "offline")
+        {
+            await LoadAsync();
+            await RefreshStorageAsync();
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnFilesChanged()
+    {
+        await LoadAsync();
+        await RefreshStorageAsync();
+    }
+
+    [JSInvokable]
+    public async Task OnInstallAvailable()
+    {
+        await RefreshInstallAsync();
+    }
+
+    private async Task SyncNowAsync()
+    {
+        if (module is not null)
+            await module.InvokeVoidAsync("syncNow");
+    }
+
+    private async Task BrowseAsync()
+    {
+        if (module is not null)
+            await module.InvokeVoidAsync("openPicker", "file-input");
+    }
+
+    private async Task InstallAsync()
+    {
+        if (module is null)
+            return;
+
+        await module.InvokeAsync<bool>("promptInstall");
+        await RefreshInstallAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task DownloadAsync(string path)
+    {
+        if (module is not null)
+            await module.InvokeVoidAsync("download", path);
+    }
+
+    private async Task RemoveAsync(string path)
+    {
+        if (module is null)
+            return;
+
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Delete {path}?");
+        if (!confirmed)
+            return;
+
+        try
+        {
+            await module.InvokeVoidAsync("remove", path);
+        }
+        catch (JSException)
+        {
+        }
+
+        await LoadAsync();
+        await RefreshStorageAsync();
+    }
+
+    private async Task RefreshInstallAsync()
+    {
+        if (module is null)
+            return;
+
+        InstallAvailable = await module.InvokeAsync<bool>("installAvailable");
+        ShowIosHint = await module.InvokeAsync<bool>("showIosHint");
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task RefreshStorageAsync()
+    {
+        if (module is null)
+            return;
+
+        var storage = await module.InvokeAsync<StorageInfo>("storage");
+        var total = Files.Sum(file => file.Size);
+        StorageText = storage.Quota > 0
+            ? $"{Files.Count} files · {FormatSize(total)} · {FormatSize(storage.Usage)} on disk"
+            : $"{Files.Count} files · {FormatSize(total)}";
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static string DisplayName(string path) =>
+        path.StartsWith("inbox/", StringComparison.Ordinal) ? path[6..] : path;
+
+    private static string FormatSize(long bytes)
+    {
+        if (bytes <= 0)
+            return "0 B";
+
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        double value = bytes;
+        var unit = 0;
+
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit += 1;
+        }
+
+        return unit == 0 || value >= 10
+            ? $"{value:0} {units[unit]}"
+            : $"{value:0.0} {units[unit]}";
+    }
+
+    private static string FormatDate(long milliseconds) =>
+        DateTimeOffset.FromUnixTimeMilliseconds(milliseconds).ToLocalTime().ToString("g");
+}
